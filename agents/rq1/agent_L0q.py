@@ -18,17 +18,17 @@ import ollama
 # =======================
 BASE_DIR = Path(__file__).resolve().parent
 
-# root del progetto cobol
+# root of the cobol project
 PROJECT_ROOT = BASE_DIR.parent
 
-# input CSV sempre qui
+# input CSV always here
 REPORTS_DIR = PROJECT_ROOT / "reports" / "cv10_splits"
 
-# immagini temporanee per le query
+# temporary images for queries
 QUERY_IMAGES_DIR = BASE_DIR / "query_images"
 QUERY_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-# output dell'agente (restano nel case)
+# agent output (stays in the case directory)
 OUT_DIR = BASE_DIR
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -48,7 +48,7 @@ def _safe_normalize(vec: np.ndarray) -> np.ndarray:
 
 
 # =========================================================
-# 1) Download immagini (cache + retry)
+# 1) Download images (cache + retry)
 # =========================================================
 def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int = 20, retries: int = 2):
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -59,7 +59,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 
     filename = save_dir / basename
 
-    # se già presente, non riscaricare
+    # if already present, do not download again
     if filename.exists() and filename.stat().st_size > 0:
         return str(filename)
 
@@ -71,12 +71,12 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
             resp = session.get(url, timeout=timeout_s, headers=headers)
             if resp.status_code == 200 and resp.content:
                 filename.write_bytes(resp.content)
-                print(f"[LOG] Scaricata immagine: {url} -> {filename}")
+                print(f"[LOG] Downloaded image: {url} -> {filename}")
                 return str(filename)
             else:
-                print(f"[LOG] Errore HTTP scaricando {url}: {resp.status_code}")
+                print(f"[LOG] Error HTTP downloading {url}: {resp.status_code}")
         except Exception as e:
-            print(f"[LOG] Errore download (tentativo {attempt+1}/{retries+1}) {url}: {e}")
+            print(f"[LOG] Error download (attempt {attempt+1}/{retries+1}) {url}: {e}")
             time.sleep(1.0)
 
     return None
@@ -87,7 +87,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 # =========================================================
 class UnifiedCLIPEmbedding:
     def __init__(self):
-        print("[LOG] Inizializzazione CLIP...")
+        print("[LOG] Inizialization CLIP...")
         self.device = os.environ.get("FORCE_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
         print(f"[LOG] Device: {self.device}")
 
@@ -110,7 +110,7 @@ class UnifiedCLIPEmbedding:
 
 
 # =========================================================
-# 3) INFERENZA QWEN2.5-VL (robusta a diverse versioni)
+# 3) QWEN2.5-VL INFERENCE (compatible with different versions)
 # =========================================================
 def qwen_infer(prompt, image_paths):
     try:
@@ -119,7 +119,7 @@ def qwen_infer(prompt, image_paths):
             prompt=prompt,
             images=image_paths
         )
-        # alcune versioni ritornano dict con "response", altre "message"
+        # some versions return a dict with "response", others with "message"
         return result.get("response") or result.get("message", {}).get("content", "")
     except Exception as e:
         print("[LOG] ERRORE QWEN:", e)
@@ -127,7 +127,7 @@ def qwen_infer(prompt, image_paths):
 
 
 # =========================================================
-# 4) JSON Parsing robusto
+# 4) Robust JSON Parsing
 # =========================================================
 def robust_parse_json(text):
     clean = (
@@ -143,9 +143,9 @@ def robust_parse_json(text):
 
     try:
         data = json.loads(clean)
-        print("[LOG] JSON parsing riuscito.")
+        print("[LOG] JSON parsing succeed.")
     except Exception:
-        print("[LOG] JSON NON PARSABILE:")
+        print("[LOG] JSON NOT PARSABLE:")
         print(text)
         return {
             "ContainedWaste": "",
@@ -199,7 +199,7 @@ def robust_parse_json(text):
 
 
 # =========================================================
-# 5) QWEN2.5-VL – matching e classificazione
+# 5) QWEN2.5-VL – matching and classification
 # =========================================================
 def verify_riga_qwen(
     input_images,
@@ -209,44 +209,44 @@ def verify_riga_qwen(
 ):
     all_images = input_images
 
-    # PROMPT (NON MODIFICATO)
+    # PROMPT (UNCHANGED)
     prompt = f"""
-Sei un assistente per la **verifica della classificazione dei rifiuti**.
+You are an assistant for **verifying waste classification**.
 
-Per ogni record hai:
-- IMMAGINI da analizzare 
-- Una classificazione fatta dall'utente.
+For each record, you have:
+- IMAGES to analyze 
+- A classification provided by the user.
 
-Devi:
-1) Valutare SE la classificazione dell'utente è corretta.
-2) Proporre la TUA classificazione indipendente (anche se coincide con quella dell'utente).
-3) Spiegare brevemente il tuo ragionamento.
+You must:
+1) Assess WHETHER the user's classification is correct.
+2) Provide YOUR independent classification (even if it matches the user's).
+3) Briefly explain your reasoning.
 
-Classificazione dell'utente:
-- ContainedWaste (utente): "{original_cw}"
-- Size (utente): "{original_size}"
+User's classification:
+- ContainedWaste (user): "{original_cw}"
+- Size (user): "{original_size}"
 
-La colonna Description dell'utente contiene:
+The user's Description column contains:
 "{description_text}"
 
-Campi richiesti nel JSON finale:
+Required fields in the final JSON:
 
-1) containedWaste_generated: la tua classificazione completa per i tipi dei rifiuti presenti nelle immagini che possono essere solo quelli in questa lista: [aluminum/metal,waste not identifiable,construction materials,glass,plastic,textiles,wood,
+1) containedWaste_generated: your complete classification of the waste types present in the images, using only the types in this list: [aluminum/metal,waste not identifiable,construction materials,glass,plastic,textiles,wood,
 bulky waste,electronic appareil,tyres,paper,chemicals and drugs,organic,other]
-2) size_generated: la tua classificazione completa per la dimensione del rifiuto che può essere: [small,medium,big]
-3) notes: motivazione dettagliata e spiegazione del ragionamento che ti ha portato a quella classificazione
-4) multiple_subjects: TRUE/FALSE (se sono presenti più soggetti distinti nelle immagini)
-5) accurate_description: TRUE/FALSE (se la Description indicata dall'utente in "{description_text}" riflette accuratamente i rifiuti presenti nelle immagini analizzate)
-6) human_in_frame: TRUE/FALSE (se ci sono persone nelle immagini)
-7) clear_subject: TRUE/FALSE (se i rifiuti sono chiaramente visibili)
+2) size_generated: your complete classification of the waste size, which can be: [small,medium,big]
+3) notes: detailed rationale and explanation of the reasoning behind your classification
+4) multiple_subjects: TRUE/FALSE (whether multiple distinct subjects are present in the images)
+5) accurate_description: TRUE/FALSE (whether the Description provided by the user in "{description_text}" accurately reflects the waste present in the analyzed images)
+6) human_in_frame: TRUE/FALSE (whether people are present in the images)
+7) clear_subject: TRUE/FALSE (whether the waste is clearly visible)
 
-Rispondi SOLO in JSON valido. Nessun testo fuori dal JSON.
+Respond ONLY in valid JSON. Do not include any text outside the JSON.
 
-Esempio di risposta valida:
+Example of a valid response:
 {{
   "containedWaste_generated": "plastic, paper",
   "size_generated": "medium",
-  "notes": "La dimensione è medium. L'utente ha indicato 'plastic, paper' che coincide con la mia valutazione.",
+  "notes": "The size is medium. The user indicated 'plastic, paper', which matches my assessment.",
   "multiple_subjects": "TRUE",
   "accurate_description": "FALSE",
   "human_in_frame": "FALSE",
@@ -290,7 +290,7 @@ def match_size(original, generated):
 
 
 # =========================================================
-# 7) PIPELINE COMPLETA (cluster-safe: paths + mkdir + times)
+# 7) COMPLETE PIPELINE (cluster-safe: paths + mkdir + times)
 # =========================================================
 def verify_csv(input_csv, output_csv, top_k=3):
     print("[LOG] Caricamento CSV:", input_csv)
@@ -340,7 +340,7 @@ def verify_csv(input_csv, output_csv, top_k=3):
             timings.append({"row": int(idx), "seconds": 0.0})
             continue
 
-        # NB: embedder/collection non usati qui (LLM-only), ma lasciati invariati per minimizzare diff.
+        # NB: embedder/collection are not used here (LLM-only), but are kept unchanged to minimize the diff.
 
         parsed = verify_riga_qwen(
             input_images=input_imgs,
@@ -381,8 +381,8 @@ def verify_csv(input_csv, output_csv, top_k=3):
     df.to_csv(output_csv, index=False)
     print("[LOG] Salvato report agente:", output_csv)
     
-    # --- tempi ---
-    agent_name = Path(__file__).stem   # es. agent_A
+    # --- timings ---
+    agent_name = Path(__file__).stem   # e.g. agent_A
     times_path = OUT_DIR / f"classification_times_{agent_name}.csv"
     pd.DataFrame(timings).to_csv(times_path, index=False)
     print("[LOG] Salvati i tempi in:", times_path)
