@@ -17,9 +17,9 @@ import ollama
 # Paths + cache (cluster-safe)
 # =======================
 BASE_DIR = Path(__file__).resolve().parent            # .../cobol/agents
-PROJECT_DIR = BASE_DIR.parent                         # .../cobol (root progetto)
+PROJECT_DIR = BASE_DIR.parent                         # .../cobol (project root)
 
-# input CSV (come nel tuo script)
+# input CSV (as in your script)
 REPORTS_DIR = PROJECT_DIR / "reports" / "cv10_splits"
 
 QUERY_IMAGES_DIR = PROJECT_DIR / "query_images"
@@ -44,11 +44,11 @@ def _safe_normalize(vec: np.ndarray) -> np.ndarray:
 
 
 # =========================================================
-# ID helpers (adatta se hai colonne diverse nel CSV)
+# ID helpers (adjust if your CSV has different columns)
 # =========================================================
 def get_row_report_id(row: pd.Series) -> str:
     """
-    Ricava un ID stabile dal CSV se presente, altrimenti fallback su row index.
+    Extract a stable ID from the CSV if present; otherwise, fall back to the row index.
     """
     for k in ["ReportId", "report_id", "Id", "ID", "reportId", "source_id", "uuid", "report_uuid"]:
         if k in row and pd.notna(row[k]):
@@ -60,7 +60,7 @@ def get_row_report_id(row: pd.Series) -> str:
 
 def get_meta_report_id(md: dict) -> str:
     """
-    Ricava un ID stabile dai metadata di Chroma (se presente). Utile per debug/contesto.
+    Extract a stable ID from the Chroma metadata, if present. Useful for debugging and context.
     """
     if not md:
         return ""
@@ -74,7 +74,7 @@ def get_meta_report_id(md: dict) -> str:
 
 
 # =========================================================
-# 1) Download immagini (cache + retry)
+# 1) Download images (cache + retry)
 # =========================================================
 def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int = 20, retries: int = 2):
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 
     filename = save_dir / basename
 
-    # se già presente, non riscaricare
+    # if already present, do not download again
     if filename.exists() and filename.stat().st_size > 0:
         return str(filename)
 
@@ -97,12 +97,12 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
             resp = session.get(url, timeout=timeout_s, headers=headers)
             if resp.status_code == 200 and resp.content:
                 filename.write_bytes(resp.content)
-                print(f"[LOG] Scaricata immagine: {url} -> {filename}")
+                print(f"[LOG] Image downloaded: {url} -> {filename}")
                 return str(filename)
             else:
-                print(f"[LOG] Errore HTTP scaricando {url}: {resp.status_code}")
+                print(f"[LOG] HTTP error downloading {url}: {resp.status_code}")
         except Exception as e:
-            print(f"[LOG] Errore download (tentativo {attempt+1}/{retries+1}) {url}: {e}")
+            print(f"[LOG] Download error (attempt {attempt+1}/{retries+1}) {url}: {e}")
             time.sleep(1.0)
 
     return None
@@ -113,7 +113,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 # =========================================================
 class UnifiedCLIPEmbedding:
     def __init__(self):
-        print("[LOG] Inizializzazione CLIP...")
+        print("[LOG] Initializing CLIP...")
         self.device = os.environ.get("FORCE_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
         print(f"[LOG] Device: {self.device}")
 
@@ -123,7 +123,7 @@ class UnifiedCLIPEmbedding:
         self.model = self.model.to(self.device).eval()
 
     def embed_image(self, img_path: str) -> np.ndarray:
-        print(f"[LOG] Embedding immagine: {img_path}")
+        print(f"[LOG] Embedding image: {img_path}")
         img = Image.open(img_path).convert("RGB")
         tensor = self.preprocess(img).unsqueeze(0).to(self.device)
 
@@ -144,15 +144,15 @@ def qwen_infer(prompt: str, image_paths: list[str], model: str):
             prompt=prompt,
             images=image_paths
         )
-        # alcune versioni ritornano dict con "response", altre "message"
+        # some versions return a dict with "response", others with "message"
         return result.get("response") or result.get("message", {}).get("content", "")
     except Exception as e:
-        print("[LOG] ERRORE QWEN:", e)
+        print("[LOG] QWEN ERROR:", e)
         return ""
 
 
 # =========================================================
-# 4) JSON Parsing robusto per duplicate-check
+# 4) Robust JSON parsing for duplicate check
 # =========================================================
 def robust_parse_json(text: str, default_obj: dict) -> dict:
     clean = (
@@ -172,7 +172,7 @@ def robust_parse_json(text: str, default_obj: dict) -> dict:
             return data
         return default_obj
     except Exception:
-        print("[LOG] JSON NON PARSABILE:")
+        print("[LOG] JSON COULD NOT BE PARSED:")
         print(text)
         return default_obj
 
@@ -201,7 +201,7 @@ def parse_duplicate_json(text: str, top_k: int) -> dict:
     conf = data.get("confidence", "")
     notes = data.get("notes", "")
 
-    # Regole: se FALSE -> rank/conf vuoti
+    # Rule: if FALSE -> empty rank/confidence
     if is_dup == "FALSE":
         return {"is_duplicate": "FALSE", "duplicate_rank": "", "confidence": "", "notes": str(notes)}
 
@@ -231,7 +231,7 @@ def parse_duplicate_json(text: str, top_k: int) -> dict:
 
 
 # =========================================================
-# 5) QWEN2.5-VL – DUPLICATE CHECK (solo)
+# 5) QWEN2.5-VL – DUPLICATE CHECK (only)
 # =========================================================
 def qwen_duplicate_check(
     input_images: list[str],
@@ -241,67 +241,67 @@ def qwen_duplicate_check(
     top_k: int,
     model: str
 ) -> dict:
-    # IMPORTANTE: Qwen vede una sola lista di immagini.
-    # Convenzione: PRIME immagini = input, SUCCESSIVE = retrieved
+    # IMPORTANT: Qwen sees a single list of images.
+    # Convention: FIRST images = input, SUBSEQUENT images = retrieved
     all_images = input_images + retrieved_images
 
-    # FIX: in una f-string le graffe letterali vanno raddoppiate: {{ }}
+    # FIX: literal braces in an f-string must be doubled: {{ }}
     prompt = f"""
-Sei un assistente che deve analizzare.
+You are an assistant tasked with analyzing reports.
 
-Hai:
-- IMMAGINI ORIGINALI del report (le PRIME immagini che ti vengono fornite).
-- IMMAGINI simili dalla KB + info testuali (le SUCCESSIVE immagini che ti vengono fornite).
-- Info testuali dei candidati (rank 1..{top_k}):
+You have:
+- ORIGINAL IMAGES of the report (the FIRST images you are given).
+- Similar IMAGES from the knowledge base + textual information (the SUBSEQUENT images you are given).
+- Textual information about the candidates (rank 1..{top_k}):
 {retrieved_candidates_text}
-- Descrizione del report: "{description_text}" (usala solo come supporto, potrebbe essere generica o imprecisa)
+- Report description: "{description_text}" (use it only as supporting information; it may be generic or inaccurate)
 
-Devi rilevare se il report nelle PRIME immagini è un DUPLICATO di uno dei candidati recuperati.
+Determine whether the report in the FIRST images is a DUPLICATE of one of the retrieved candidates.
 
-Definizione di DUPLICATO:
-- TRUE SOLO se le immagini mostrano chiaramente lo STESSO evento/scena/soggetto (stesso cumulo/oggetto rifiuti, stessa disposizione o elementi distintivi, stesso contesto),
-  anche con piccole variazioni (angolo, zoom, qualità).
-- FALSE se è solo simile (stessa categoria o scena generica) ma NON è lo stesso caso.
-- Se non hai evidenza sufficiente, rispondi FALSE con confidence bassa.
+Definition of DUPLICATE:
+- TRUE ONLY if the images clearly show the SAME event/scene/subject (the same pile or waste object, the same arrangement or distinctive features, the same context),
+  even with minor differences (angle, zoom, quality).
+- FALSE if it is merely similar (same category or generic scene) but is NOT the same case.
+- If there is insufficient evidence, respond FALSE with low confidence.
 
-Regole di output:
-- "is_duplicate" deve essere SOLO "TRUE" o "FALSE" (stringhe)
-- Se "is_duplicate" è "FALSE", allora "duplicate_rank" e "confidence" devono essere stringhe vuote
+Output rules:
+- "is_duplicate" must be ONLY "TRUE" or "FALSE" (strings)
+- If "is_duplicate" is "FALSE", then "duplicate_rank" and "confidence" must be empty strings
 
-Campi richiesti nel JSON finale:
+Required fields in the final JSON:
 1) "is_duplicate": "TRUE/FALSE"
-2) "duplicate_rank": "1..{top_k} oppure vuoto"
-3) "confidence": "0..1 oppure vuoto"
-4) "notes": "breve motivazione (cita 1-2 evidenze visive, e usa la descrizione solo se coerente)"
+2) "duplicate_rank": "1..{top_k} or empty"
+3) "confidence": "0..1 or empty"
+4) "notes": "brief rationale (cite 1–2 pieces of visual evidence and use the description only if consistent)"
 
-Esempio di risposta valida:
+Example of a valid response:
 {{
   "is_duplicate": "TRUE",
   "duplicate_rank": "2",
   "confidence": "0.8",
-  "notes": "Le immagini mostrano lo stesso cumulo con stessa disposizione e stesso elemento distintivo; la descrizione è coerente."
+  "notes": "The images show the same pile with the same arrangement and distinctive feature; the description is consistent."
 }}
 
-Nessun testo fuori dal JSON.
+Do not include any text outside the JSON.
 """
 
-    print("[LOG] Chiamata Qwen2.5-VL (duplicate-check) con immagini:", all_images)
+    print("[LOG] Calling Qwen2.5-VL (duplicate check) with images:", all_images)
     raw = qwen_infer(prompt, all_images, model=model)
 
-    print("[LOG] Risposta grezza Qwen (duplicate-check):")
+    print("[LOG] Raw Qwen response (duplicate check):")
     print(raw)
 
     return parse_duplicate_json(raw, top_k=top_k)
 
 
 # =========================================================
-# 6) Pipeline: SOLO duplicate-check -> output CSV
+# 6) Pipeline: duplicate check ONLY -> output CSV
 # =========================================================
 def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
     model = os.environ.get("OLLAMA_MODEL", "qwen2.5vl:7b")
-    print(f"[LOG] Modello Qwen-VL: {model}")
+    print(f"[LOG] Qwen-VL model: {model}")
 
-    print("[LOG] Caricamento CSV:", input_csv)
+    print("[LOG] Loading CSV:", input_csv)
     df = pd.read_csv(input_csv)
 
     if not CHROMA_DIR.exists():
@@ -312,7 +312,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
 
     embedder = UnifiedCLIPEmbedding()
 
-    # colonne output CSV
+    # CSV output columns
     out_report_id = []
     out_dup_check = []
     out_dup_rank = []
@@ -321,7 +321,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
     out_error = []
 
     for idx, row in df.iterrows():
-        print(f"\n[LOG] === Riga {idx} ===")
+        print(f"\n[LOG] === Row {idx} ===")
         report_id = get_row_report_id(row)
 
         description_text = str(row.get("Description", "")).strip()
@@ -343,7 +343,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
             out_error.append("no_images")
             continue
 
-        # retrieval via CLIP (uso la prima immagine come query)
+        # retrieval via CLIP (use the first image as the query)
         qvec = embedder.embed_image(input_imgs[0]).tolist()
         retr = collection.query(
             query_embeddings=[qvec],
@@ -361,7 +361,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
             if img_path and os.path.exists(img_path):
                 retrieved_imgs.append(img_path)
 
-        # testo candidati numerato
+        # numbered candidate text
         cand_lines = []
         n = min(top_k, len(docs), len(mds), len(dists))
         for i in range(n):
@@ -373,11 +373,11 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
             if len(snippet) > 300:
                 snippet = snippet[:300] + "..."
             cand_lines.append(
-                f"[CANDIDATO rank={i+1}] distance={dist:.4f} report_id={rid} image_path={imgp}\n"
+                f"[CANDIDATE rank={i+1}] distance={dist:.4f} report_id={rid} image_path={imgp}\n"
                 f"doc: {snippet}"
             )
 
-        retrieved_candidates_text = "\n\n".join(cand_lines) if cand_lines else "(nessun candidato disponibile)"
+        retrieved_candidates_text = "\n\n".join(cand_lines) if cand_lines else "(no candidates available)"
 
         dup = qwen_duplicate_check(
             input_images=input_imgs,
@@ -406,7 +406,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
 
     out_path = OUT_DIR / Path(output_csv).name
     out_df.to_csv(out_path, index=False)
-    print("[LOG] Salvato output CSV:", out_path)
+    print("[LOG] CSV output saved:", out_path)
 
 
 # =========================================================
