@@ -21,7 +21,7 @@ REPORTS_DIR = (BASE_DIR.parent / "reports" / "cv10_splits").resolve()
 IMAGES_DIR = BASE_DIR / "images"
 CHROMA_DIR = BASE_DIR / "chroma_db_combined"
 
-# Cache per download modelli/pesi (utile su HPC)
+# Cache for model/weight downloads (useful on HPC)
 HF_HOME = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
 TORCH_HOME = Path(os.environ.get("TORCH_HOME", str(Path.home() / ".cache" / "torch")))
 HF_HOME.mkdir(parents=True, exist_ok=True)
@@ -35,11 +35,11 @@ def _safe_normalize(vec: np.ndarray) -> np.ndarray:
     return vec / (n + 1e-12)
 
 
-# ====== CLEANING PER CONTENUTI TESTUALI ======
+# ====== CLEANING FOR TEXT CONTENT ======
 def clean_label(text):
     """
-    Rimuove URL tra parentesi e normalizza gli spazi come nella valutazione.
-    Esempio:
+    Removes URLs in parentheses and normalizes whitespace as in the evaluation.
+    Example:
     'plastic (http://...) , paper (http://...)' → 'plastic, paper'
     """
     if not isinstance(text, str):
@@ -50,7 +50,7 @@ def clean_label(text):
     return cleaned.strip()
 
 
-# === Scarica immagini da URL multipli ===
+# === Download images from multiple URLs ===
 def download_images(image_field, save_dir: Path = IMAGES_DIR, timeout_s: int = 20, retries: int = 2):
     save_dir.mkdir(parents=True, exist_ok=True)
     image_paths = []
@@ -65,15 +65,15 @@ def download_images(image_field, save_dir: Path = IMAGES_DIR, timeout_s: int = 2
     headers = {"User-Agent": "Mozilla/5.0"}
 
     for url in urls:
-        # nome file locale: basename dell’URL (senza querystring)
+        # local filename: URL basename (without the query string)
         basename = os.path.basename(url.split("?")[0])
         if not basename:
-            # fallback se URL strano
+            # fallback for unusual URLs
             basename = f"img_{abs(hash(url))}.jpg"
 
         filename = save_dir / basename
 
-        # se già scaricata, non riscaricare
+        # if already downloaded, do not download again
         if filename.exists() and filename.stat().st_size > 0:
             image_paths.append(str(filename))
             image_urls.append(url)
@@ -92,22 +92,22 @@ def download_images(image_field, save_dir: Path = IMAGES_DIR, timeout_s: int = 2
                 else:
                     print(f"[download] status={resp.status_code} url={url}")
             except Exception as e:
-                print(f"[download] errore (tentativo {attempt+1}/{retries+1}) url={url}: {e}")
+                print(f"[download] error (attempt {attempt+1}/{retries+1}) url={url}: {e}")
                 time.sleep(1.0)
 
         if not ok:
-            # non aggiungo nulla: immagine fallita
+            # do not add anything: image download failed
             pass
 
     return image_paths, image_urls
 
 
-# === Carica CSV come lista di Document (uno per immagine) ===
+# === Load CSV as a list of Documents (one per image) ===
 def load_csv_as_documents(csv_path: Path):
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV non trovato: {csv_path}")
 
-    # Leggi forzando la colonna Picture come stringa e disattiva il parsing automatico delle NA
+    # Read Picture as a string and disable automatic NA parsing
     df = pd.read_csv(csv_path, dtype={'Picture': str}, keep_default_na=False, na_filter=False)
 
     documents = []
@@ -118,18 +118,18 @@ def load_csv_as_documents(csv_path: Path):
         size = str(row.get("Size", ""))
         raw_image_field = row.get("Picture", None)
 
-        # Diagnostica minima: mostra come appare il campo
+        # Minimal diagnostics: show how the field appears
         if raw_image_field is None:
             skipped_rows.append((idx, "None"))
             continue
 
-        # Normalizza: rimuovi spazi e controlla valori evidenti di mancante
+        # Normalize: strip whitespace and check for obvious missing values
         image_field = str(raw_image_field).strip()
         if image_field.lower() in ("", "nan", "none", "null"):
             skipped_rows.append((idx, f"empty_like:{repr(image_field)}"))
             continue
 
-        # Funzione di controllo URL/format prima di splittare
+        # Check URL/format before splitting
         from urllib.parse import urlparse
         def looks_like_url(s):
             try:
@@ -139,10 +139,10 @@ def load_csv_as_documents(csv_path: Path):
             except Exception:
                 return False
 
-        # split sui separatori usati (gestisce sia "a, b" sia "a; b")
+        # Split on the separators in use (handles both "a, b" and "a; b")
         urls = [u.strip() for u in image_field.replace(";", ",").split(",") if u.strip()]
 
-        # filtra solo URL che sembrano validi
+        # Keep only URLs that look valid
         urls = [u for u in urls if looks_like_url(u)]
 
         if not urls:
@@ -172,15 +172,15 @@ def load_csv_as_documents(csv_path: Path):
             documents.append(Document(page_content=content, metadata=metadata))
 
     if skipped_rows:
-        print("Righe scartate (idx, motivo) — prime 20:", skipped_rows[:20])
+        print("Skipped rows (idx, reason) — first 20:", skipped_rows[:20])
 
     return documents
 
 
-# === EMBEDDING MULTIMODALE (testo + immagine) ===
+# === MULTIMODAL EMBEDDING (text + image) ===
 class UnifiedCLIPEmbedding:
     def __init__(self):
-        print("Caricamento modello CLIP (ViT-L-14 openai) per testo e immagini...")
+        print("Loading CLIP model (ViT-L-14 openai) for text and images...")
         self.device = os.environ.get("FORCE_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
         print(f"Device: {self.device}")
 
@@ -215,20 +215,20 @@ class UnifiedCLIPEmbedding:
             try:
                 img_emb = self.embed_image(img_path)
             except Exception as e:
-                print(f"Errore embedding immagine {img_path}: {e}")
+                print(f"Error embedding image {img_path}: {e}")
 
-        # concatenazione: [text_emb | img_emb]
+        # concatenation: [text_emb | img_emb]
         return np.concatenate([text_emb, img_emb]).astype(np.float32)
 
 
-# === CREA CHROMA ===
+# === CREATE CHROMA ===
 def create_vectorstore(documents, embedding_model: UnifiedCLIPEmbedding):
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
     client = PersistentClient(path=str(CHROMA_DIR))
     collection_name = "waste_combined"
 
-    # compatibilità: list_collections può restituire oggetti o dict a seconda versione
+    # compatibility: list_collections may return objects or dicts depending on the version
     existing = []
     for c in client.list_collections():
         name = getattr(c, "name", None) or (c.get("name") if isinstance(c, dict) else None)
@@ -236,7 +236,7 @@ def create_vectorstore(documents, embedding_model: UnifiedCLIPEmbedding):
             existing.append(name)
 
     if collection_name in existing:
-        print(f"Collection '{collection_name}' esistente → elimino...")
+        print(f"Collection '{collection_name}' exists → deleting...")
         client.delete_collection(collection_name)
 
     collection = client.create_collection(
@@ -247,7 +247,7 @@ def create_vectorstore(documents, embedding_model: UnifiedCLIPEmbedding):
     for i, doc in enumerate(documents):
         emb = embedding_model.embed_document(doc)
 
-        # Chroma vuole metadati JSON-serializzabili → converto tutto in stringhe
+        # Chroma requires JSON-serializable metadata → convert everything to strings
         clean_metadata = {k: str(v) for k, v in doc.metadata.items()}
 
         collection.add(
@@ -258,9 +258,9 @@ def create_vectorstore(documents, embedding_model: UnifiedCLIPEmbedding):
         )
 
         if (i + 1) % 200 == 0:
-            print(f"  aggiunti {i+1}/{len(documents)} documenti...")
+            print(f"  added {i+1}/{len(documents)} documents...")
 
-    print(f"Database salvato in {CHROMA_DIR}")
+    print(f"Database saved in {CHROMA_DIR}")
     return collection
 
 
@@ -269,14 +269,14 @@ if __name__ == "__main__":
     csv_path = REPORTS_DIR / "split_01_train.csv"
 
     print(f"CSV: {csv_path}")
-    print("Caricamento CSV e download immagini...")
+    print("Loading CSV and downloading images...")
     documents = load_csv_as_documents(csv_path)
-    print(f"Totale immagini caricate: {len(documents)}")
+    print(f"Total images loaded: {len(documents)}")
 
-    print("Inizializzazione embedding unificato CLIP...")
+    print("Initializing unified CLIP embedding...")
     embedding_model = UnifiedCLIPEmbedding()
 
-    print("Creazione vector store...")
+    print("Creating vector store...")
     _ = create_vectorstore(documents, embedding_model)
 
-    print("✅ Database multimodale aggiornato creato con successo.")
+    print("✅ Updated multimodal database created successfully.")
