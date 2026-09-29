@@ -18,23 +18,23 @@ from langchain_core.messages import HumanMessage
 # =======================
 BASE_DIR = Path(__file__).resolve().parent
 
-# root del progetto cobol
+# root of the cobol project
 PROJECT_ROOT = BASE_DIR.parent
 
-# input CSV sempre qui
+# input CSV always here
 REPORTS_DIR = PROJECT_ROOT / "reports" / "cv10_splits"
 
-# immagini temporanee per le query
+# temporary images for queries
 QUERY_IMAGES_DIR = BASE_DIR / "query_images"
 QUERY_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-# output dell'agente (restano nel case)
+# agent output (stays in the case directory)
 OUT_DIR = BASE_DIR
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 CHROMA_DIR = BASE_DIR / "chroma_db_combined"
 
-# Cache per download modelli/pesi (cluster-safe)
+# Cache for model/weight downloads (cluster-safe)
 HF_HOME = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
 TORCH_HOME = Path(os.environ.get("TORCH_HOME", str(Path.home() / ".cache" / "torch")))
 HF_HOME.mkdir(parents=True, exist_ok=True)
@@ -49,7 +49,7 @@ def _safe_normalize(vec: np.ndarray) -> np.ndarray:
 
 
 # =========================================================
-# 1) Download immagini (cache + retry)
+# 1) Download images (cache + retry)
 # =========================================================
 def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int = 20, retries: int = 2):
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -60,7 +60,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 
     filename = save_dir / basename
 
-    # se già presente, non riscaricare
+    # if already present, do not download again
     if filename.exists() and filename.stat().st_size > 0:
         return str(filename)
 
@@ -72,12 +72,12 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
             resp = session.get(url, timeout=timeout_s, headers=headers)
             if resp.status_code == 200 and resp.content:
                 filename.write_bytes(resp.content)
-                print(f"[LOG] Scaricata immagine: {url} -> {filename}")
+                print(f"[LOG] Image downloaded: {url} -> {filename}")
                 return str(filename)
             else:
-                print(f"[LOG] Errore HTTP scaricando {url}: {resp.status_code}")
+                print(f"[LOG] HTTP error downloading {url}: {resp.status_code}")
         except Exception as e:
-            print(f"[LOG] Errore download (tentativo {attempt+1}/{retries+1}) {url}: {e}")
+            print(f"[LOG] Download error (attempt {attempt+1}/{retries+1}) {url}: {e}")
             time.sleep(1.0)
 
     return None
@@ -88,7 +88,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 # =========================================================
 class UnifiedCLIPEmbedding:
     def __init__(self):
-        print("[LOG] Inizializzazione CLIP...")
+        print("[LOG] Initializing CLIP...")
         self.device = os.environ.get("FORCE_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
         print(f"[LOG] Device: {self.device}")
 
@@ -98,7 +98,7 @@ class UnifiedCLIPEmbedding:
         self.model = self.model.to(self.device).eval()
 
     def embed_image(self, img_path):
-        print(f"[LOG] Embedding immagine: {img_path}")
+        print(f"[LOG] Embedding image: {img_path}")
         img = Image.open(img_path).convert("RGB")
         tensor = self.preprocess(img).unsqueeze(0).to(self.device)
 
@@ -111,7 +111,7 @@ class UnifiedCLIPEmbedding:
 
 
 # =========================================================
-# 3) JSON Parsing robusto
+# 3) Robust JSON Parsing
 # =========================================================
 def robust_parse_json(text):
     clean = (
@@ -128,9 +128,9 @@ def robust_parse_json(text):
 
     try:
         data = json.loads(clean)
-        print("[LOG] JSON parsing riuscito.")
+        print("[LOG] JSON parsing succeeded.")
     except Exception:
-        print("[LOG] JSON NON PARSABILE:")
+        print("[LOG] JSON COULD NOT BE PARSED:")
         print(text)
         return {
             "ContainedWaste": "",
@@ -186,7 +186,7 @@ def robust_parse_json(text):
 
 
 # =========================================================
-# 4) LLaVA – verifica valori originali e generazione nuovi
+# 4) LLaVA – verify original values and generate new ones
 # =========================================================
 def verify_riga_llava(
     input_images,
@@ -197,65 +197,65 @@ def verify_riga_llava(
     description_text,
     llm
 ):
-    print("[LOG] Invio immagini input:", input_images)
+    print("[LOG] Sending input images:", input_images)
     msg_input = HumanMessage(
-        content="Queste sono le IMMAGINI ORIGINALI da valutare.",
+        content="These are the ORIGINAL IMAGES to evaluate.",
         additional_kwargs={"images": input_images}
     )
 
-    print("[LOG] Invio immagini retrieved:", retrieved_images)
+    print("[LOG] Sending retrieved images:", retrieved_images)
     msg_retrieved = HumanMessage(
         content=(
-            "Queste sono IMMAGINI SIMILI recuperate dal database e già classificate.\n\n"
-            "Informazioni testuali relative alle immagini retrieved:\n\n"
+            "These are SIMILAR IMAGES retrieved from the database and already classified.\n\n"
+            "Textual information about the retrieved images:\n\n"
             f"{retrieved_docs}\n\n"
-            "Usale solo come esempio o riferimento."
+            "Use them only as examples or references."
         ),
         additional_kwargs={"images": retrieved_images}
     )
 
-    # PROMPT (NON MODIFICATO)
+    # PROMPT (UNCHANGED)
     msg_instruction = HumanMessage(
         content=f"""
-Sei un assistente per la verifica della classificazione dei rifiuti.
+You are an assistant for verifying waste classification.
 
-Per ogni record hai:
-- IMMAGINI da analizzare (primo messaggio)
-- IMMAGINI simili recuperate dal database (secondo messaggio)
-- Testo descrittivo delle immagini retrieved:
+For each record, you have:
+- IMAGES to analyze (first message)
+- Similar IMAGES retrieved from the database (second message)
+- Descriptive text for the retrieved images:
   {retrieved_docs}
-- Una classificazione fatta dall'utente delle immagini da analizzare.
+- A user-provided classification of the images to analyze.
 
-Devi:
-1) Valutare SE la classificazione dell'utente è corretta.
-2) Proporre la TUA classificazione indipendente usando le immagini simili come riferimento per migliorare l'accuratezza.
-3) Spiegare brevemente il tuo ragionamento.
+You must:
+1) Assess WHETHER the user's classification is correct.
+2) Provide YOUR independent classification, using the similar images as a reference to improve accuracy.
+3) Briefly explain your reasoning.
 
-Classificazione dell'utente:
-- ContainedWaste (utente): "{original_cw}"
-- Size (utente): "{original_size}"
+User's classification:
+- ContainedWaste (user): "{original_cw}"
+- Size (user): "{original_size}"
 
-La colonna Description dell'utente contiene:
+The user's Description column contains:
 "{description_text}"
 
-Campi richiesti nel JSON finale:
+Required fields in the final JSON:
 
-1) containedWaste_generated: la tua classificazione completa per i tipi dei rifiuti presenti nelle immagini che possono essere solo quelli in questa lista: [aluminum/metal,waste not identifiable,construction materials,glass,plastic,textiles,wood,
+1) containedWaste_generated: your complete classification of the waste types present in the images, using only the types in this list: [aluminum/metal,waste not identifiable,construction materials,glass,plastic,textiles,wood,
 bulky waste,electronic appareil,tyres,paper,chemicals and drugs,organic,other]
-2) size_generated: la tua classificazione completa per la dimensione del rifiuto che può essere: [small,medium,big]
-3) notes: motivazione dettagliata e spiegazione del ragionamento che ti ha portato a quella classificazione
-4) multiple_subjects: TRUE/FALSE (se sono presenti più soggetti distinti nelle immagini)
-5) accurate_description: TRUE/FALSE (se la Description indicata dall'utente in "{description_text}" riflette accuratamente i rifiuti presenti nelle immagini analizzate)
-6) human_in_frame: TRUE/FALSE (se ci sono persone nelle immagini)
-7) clear_subject: TRUE/FALSE (se i rifiuti sono chiaramente visibili)
+2) size_generated: your complete classification of the waste size, which can be: [small,medium,big]
+3) notes: detailed rationale and explanation of the reasoning behind your classification
+4) multiple_subjects: TRUE/FALSE (whether multiple distinct subjects are present in the images)
+5) accurate_description: TRUE/FALSE (whether the Description provided by the user in "{description_text}" accurately reflects the waste present in the analyzed images)
+6) human_in_frame: TRUE/FALSE (whether people are present in the images)
+7) clear_subject: TRUE/FALSE (whether the waste is clearly visible)
 
-Rispondi SOLO in JSON valido. Nessun testo fuori dal JSON.
+Respond ONLY in valid JSON. Do not include any text outside the JSON.
 
-Esempio di risposta valida:
+Example of a valid response:
 {{
   "containedWaste_generated": "plastic, paper",
   "size_generated": "medium",
-  "notes": "La dimensione è medium perchè nelle immagini è presente una busta di plastica di immondizia piena di giornali e altre immagini contenenti rifiuti simili sono state classificate come medium che coincide anche con la classificazione dell'utente.",
+  "notes": "The size is medium because the images show a plastic garbage bag full of newspapers, and other images containing similar waste were classified as medium, which also matches the user's classification.",
   "multiple_subjects": "TRUE",
   "accurate_description": "FALSE",
   "human_in_frame": "FALSE",
@@ -264,17 +264,17 @@ Esempio di risposta valida:
 """
     )
 
-    print("[LOG] Invio messaggi a LLaVA...")
+    print("[LOG] Sending messages to LLaVA...")
     response = llm.invoke([msg_input, msg_retrieved, msg_instruction])
 
-    print("[LOG] Risposta grezza:")
+    print("[LOG] Raw response:")
     print(response.content)
 
     return robust_parse_json(response.content)
 
 
 # =========================================================
-# 5) MATCHING RULES (invariato)
+# 5) MATCHING RULES (unchanged)
 # =========================================================
 def match_contained_waste(original, generated):
     if not original or not generated:
@@ -302,20 +302,20 @@ def match_size(original, generated):
 
 
 # =========================================================
-# 6) PIPELINE COMPLETA (cluster-safe: chroma path + ollama env)
+# 6) COMPLETE PIPELINE (cluster-safe: chroma path + ollama env)
 # =========================================================
 def verify_csv(input_csv, output_csv, top_k=3):
-    print("[LOG] Caricamento CSV:", input_csv)
+    print("[LOG] Loading CSV:", input_csv)
     df = pd.read_csv(input_csv)
 
-    print("[LOG] Caricamento Chroma...")
+    print("[LOG] Loading Chroma...")
     if not CHROMA_DIR.exists():
         raise FileNotFoundError(f"Chroma DB non trovato: {CHROMA_DIR}")
 
     client = PersistentClient(path=str(CHROMA_DIR))
     collection = client.get_collection("waste_combined")
 
-    # Configurazione Ollama (server deve essere attivo sul nodo)
+    # Ollama configuration (the server must be running on the node)
     ollama_host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
     llava_model = os.environ.get("OLLAMA_MODEL", "llava:13b")
     print(f"[LOG] OLLAMA_HOST={ollama_host}  MODEL={llava_model}")
@@ -330,7 +330,7 @@ def verify_csv(input_csv, output_csv, top_k=3):
     timings = []
 
     for idx, row in df.iterrows():
-        print(f"\n[LOG] === Riga {idx} ===")
+        print(f"\n[LOG] === Row {idx} ===")
         start = time.time()
 
         original_cw = str(row.get("ContainedWaste", ""))
@@ -347,7 +347,7 @@ def verify_csv(input_csv, output_csv, top_k=3):
                 input_imgs.append(p)
 
         if not input_imgs:
-            print("[LOG] Nessuna immagine disponibile per questa riga.")
+            print("[LOG] No images available for this row.")
             gen_cw.append("")
             gen_sz.append("")
             match_cw.append("WRONG")
@@ -360,7 +360,7 @@ def verify_csv(input_csv, output_csv, top_k=3):
             timings.append({"row": int(idx), "seconds": 0.0})
             continue
 
-        # retrieval via CLIP (uso la prima immagine come query)
+        # retrieval via CLIP (use the first image as the query)
         qvec = embedder.embed_image(input_imgs[0]).tolist()
         results = collection.query(query_embeddings=[qvec], n_results=top_k)
 
@@ -399,7 +399,7 @@ def verify_csv(input_csv, output_csv, top_k=3):
 
         end = time.time()
         timings.append({"row": int(idx), "seconds": round(end - start, 3)})
-        print(f"[LOG] Tempo riga {idx}: {end - start:.2f} sec")
+        print(f"[LOG] Time for row {idx}: {end - start:.2f} sec")
 
     df["containedWaste_generated"] = gen_cw
     df["size_generated"] = gen_sz
@@ -413,13 +413,13 @@ def verify_csv(input_csv, output_csv, top_k=3):
 
     output_csv = OUT_DIR / Path(output_csv).name
     df.to_csv(output_csv, index=False)
-    print("[LOG] Salvato report agente:", output_csv)
+    print("[LOG] Agent report saved:", output_csv)
     
-    # --- tempi ---
-    agent_name = Path(__file__).stem   # es. agent_A
+    # --- timings ---
+    agent_name = Path(__file__).stem   # e.g. agent_A
     times_path = OUT_DIR / f"classification_times_{agent_name}.csv"
     pd.DataFrame(timings).to_csv(times_path, index=False)
-    print("[LOG] Salvati i tempi in:", times_path)
+    print("[LOG] Timings saved to:", times_path)
 
 
 # =========================================================
