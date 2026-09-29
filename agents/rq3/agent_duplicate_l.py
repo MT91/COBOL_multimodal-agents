@@ -42,12 +42,12 @@ def _safe_normalize(vec: np.ndarray) -> np.ndarray:
 
 
 # =========================================================
-# ID helpers (adatta se hai colonne/metadata diversi)
+# ID helpers (adjust if your columns/metadata differ)
 # =========================================================
 def get_row_report_id(row: pd.Series) -> str:
     """
-    Prova a ricavare un identificatore stabile del report dal CSV.
-    Adatta la lista di chiavi in base al tuo CSV.
+    Try to extract a stable report identifier from the CSV.
+    Adjust the list of keys to match your CSV.
     """
     for k in ["ReportId", "report_id", "Id", "ID", "reportId", "source_id", "uuid", "report_uuid"]:
         if k in row and pd.notna(row[k]):
@@ -59,8 +59,8 @@ def get_row_report_id(row: pd.Series) -> str:
 
 def get_meta_report_id(md: dict) -> str:
     """
-    Prova a ricavare un identificatore stabile del report dai metadata Chroma.
-    Adatta la lista di chiavi in base al tuo ingestion.
+    Try to extract a stable report identifier from the Chroma metadata.
+    Adjust the list of keys to match your ingestion process.
     """
     if not md:
         return ""
@@ -74,7 +74,7 @@ def get_meta_report_id(md: dict) -> str:
 
 
 # =========================================================
-# 1) Download immagini (cache + retry)
+# 1) Download images (cache + retry)
 # =========================================================
 def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int = 20, retries: int = 2):
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -96,12 +96,12 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
             resp = session.get(url, timeout=timeout_s, headers=headers)
             if resp.status_code == 200 and resp.content:
                 filename.write_bytes(resp.content)
-                print(f"[LOG] Scaricata immagine: {url} -> {filename}")
+                print(f"[LOG] Image downloaded: {url} -> {filename}")
                 return str(filename)
             else:
-                print(f"[LOG] Errore HTTP scaricando {url}: {resp.status_code}")
+                print(f"[LOG] HTTP error downloading {url}: {resp.status_code}")
         except Exception as e:
-            print(f"[LOG] Errore download (tentativo {attempt+1}/{retries+1}) {url}: {e}")
+            print(f"[LOG] Download error (attempt {attempt+1}/{retries+1}) {url}: {e}")
             time.sleep(1.0)
 
     return None
@@ -112,7 +112,7 @@ def download_image(url: str, save_dir: Path = QUERY_IMAGES_DIR, timeout_s: int =
 # =========================================================
 class UnifiedCLIPEmbedding:
     def __init__(self):
-        print("[LOG] Inizializzazione CLIP...")
+        print("[LOG] Initializing CLIP...")
         self.device = os.environ.get("FORCE_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
         print(f"[LOG] Device: {self.device}")
 
@@ -133,7 +133,7 @@ class UnifiedCLIPEmbedding:
 
 
 # =========================================================
-# 3) JSON parsing robusto
+# 3) Robust JSON parsing
 # =========================================================
 def robust_parse_json(text: str, default_obj: dict) -> dict:
     clean = (
@@ -153,7 +153,7 @@ def robust_parse_json(text: str, default_obj: dict) -> dict:
             return data
         return default_obj
     except Exception:
-        print("[LOG] JSON NON PARSABILE:")
+        print("[LOG] JSON COULD NOT BE PARSED:")
         print(text)
         return default_obj
 
@@ -161,9 +161,9 @@ def robust_parse_json(text: str, default_obj: dict) -> dict:
 def parse_duplicate_json(text: str, top_k: int) -> dict:
     default_obj = {
         "is_duplicate": "FALSE",      # TRUE/FALSE
-        "duplicate_rank": "",         # 1..top_k se TRUE
+        "duplicate_rank": "",         # 1..top_k if TRUE
         "confidence": "",             # 0..1
-        "notes": ""                   # breve
+        "notes": ""                   # brief
     }
     data = robust_parse_json(text, default_obj)
 
@@ -210,7 +210,7 @@ def parse_duplicate_json(text: str, top_k: int) -> dict:
 
 
 # =========================================================
-# 4) LLaVA – DUPLICATE CHECK (solo)
+# 4) LLaVA – DUPLICATE CHECK (only)
 # =========================================================
 def ask_duplicate_llava(
     input_images,
@@ -221,81 +221,81 @@ def ask_duplicate_llava(
     top_k: int
 ):
     msg_input = HumanMessage(
-        content="Queste sono le IMMAGINI ORIGINALI del report da verificare.",
+        content="These are the ORIGINAL IMAGES of the report to verify.",
         additional_kwargs={"images": input_images}
     )
 
     msg_retrieved = HumanMessage(
         content=(
-            "Queste sono le IMMAGINI SIMILI recuperate dalla knowledge base.\n"
-            "Ogni candidato è numerato (rank 1..k) e ha anche un riepilogo testuale.\n\n"
+            "These are the SIMILAR IMAGES retrieved from the knowledge base.\n"
+            "Each candidate is numbered (rank 1..k) and also has a text summary.\n\n"
             f"{retrieved_candidates_text}\n\n"
-            "Valutale come possibili duplicati dell'input."
+            "Evaluate them as possible duplicates of the input."
         ),
         additional_kwargs={"images": retrieved_images}
     )
 
-    # FIX: in una f-string le graffe letterali vanno raddoppiate: {{ }}
+    # FIX: literal braces in an f-string must be doubled: {{ }}
     msg_instruction = HumanMessage(
         content=f"""
-Sei un assistente che deve analizzare.
+You are an assistant tasked with analyzing reports.
 
-Hai:
-- IMMAGINI ORIGINALI del report (primo messaggio)
-- IMMAGINI simili dalla KB + info testuali (secondo messaggio)
-- Descrizione del report: "{description_text}" (usala solo come supporto, potrebbe essere generica o imprecisa)
+You have:
+- ORIGINAL IMAGES of the report (first message)
+- Similar IMAGES from the knowledge base + textual information (second message)
+- Report description: "{description_text}" (use it only as supporting information; it may be generic or inaccurate)
 
-Devi rilevare se il report nel primo messaggio è un DUPLICATO di uno dei candidati recuperati.
+Determine whether the report in the first message is a DUPLICATE of one of the retrieved candidates.
 
-Definizione di DUPLICATO:
-- TRUE SOLO se le immagini mostrano chiaramente lo STESSO evento/scena/soggetto (stesso cumulo/oggetto rifiuti, stessa disposizione o elementi distintivi, stesso contesto),
-  anche con piccole variazioni (angolo, zoom, qualità).
-- FALSE se è solo simile (stessa categoria di rifiuto, scena generica, contesto simile) ma NON è lo stesso caso.
-- Se non hai evidenza sufficiente, rispondi FALSE con confidence bassa.
+Definition of DUPLICATE:
+- TRUE ONLY if the images clearly show the SAME event/scene/subject (the same pile or waste object, the same arrangement or distinctive features, the same context),
+  even with minor differences (angle, zoom, quality).
+- FALSE if it is merely similar (same waste category, generic scene, similar context) but is NOT the same case.
+- If there is insufficient evidence, respond FALSE with low confidence.
 
-Se TRUE:
-- indica il candidato (rank 1..{top_k}) più probabile
-- indica confidence tra 0 e 1
+If TRUE:
+- identify the most likely candidate (rank 1..{top_k})
+- provide confidence between 0 and 1
 
-Regole di output:
-- "is_duplicate" deve essere SOLO "TRUE" o "FALSE" (stringhe)
-- Se "is_duplicate" è "FALSE", allora "duplicate_rank" e "confidence" devono essere stringhe vuote
+Output rules:
+- "is_duplicate" must be ONLY "TRUE" or "FALSE" (strings)
+- If "is_duplicate" is "FALSE", then "duplicate_rank" and "confidence" must be empty strings
 
-Campi richiesti nel JSON finale:
+Required fields in the final JSON:
 1) "is_duplicate": "TRUE/FALSE"
-2) "duplicate_rank": "1..{top_k} oppure vuoto"
-3) "confidence": "0..1 oppure vuoto"
-4) "notes": "breve motivazione (cita 1-2 evidenze visive, e usa la descrizione solo se coerente)"
+2) "duplicate_rank": "1..{top_k} or empty"
+3) "confidence": "0..1 or empty"
+4) "notes": "brief rationale (cite 1–2 pieces of visual evidence and use the description only if consistent)"
 
-Esempio di risposta valida:
+Example of a valid response:
 {{
   "is_duplicate": "TRUE",
   "duplicate_rank": "2",
   "confidence": "0.8",
-  "notes": "Le immagini mostrano lo stesso cumulo con stessa disposizione e stesso elemento distintivo; la descrizione è coerente."
+  "notes": "The images show the same pile with the same arrangement and distinctive feature; the description is consistent."
 }}
 
-Nessun testo fuori dal JSON.
+Do not include any text outside the JSON.
 """
     )
 
-    print("[LOG] Invio messaggi a LLaVA (duplicate-check)...")
+    print("[LOG] Sending messages to LLaVA (duplicate check)...")
     response = llm.invoke([msg_input, msg_retrieved, msg_instruction])
 
-    print("[LOG] Risposta grezza duplicate-check:")
+    print("[LOG] Raw duplicate-check response:")
     print(response.content)
 
     return parse_duplicate_json(response.content, top_k=top_k)
 
 
 # =========================================================
-# 5) Pipeline: SOLO duplicate-check -> output CSV
+# 5) Pipeline: duplicate check ONLY -> output CSV
 # =========================================================
 def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
-    print("[LOG] Caricamento CSV:", input_csv)
+    print("[LOG] Loading CSV:", input_csv)
     df = pd.read_csv(input_csv)
 
-    print("[LOG] Caricamento Chroma...")
+    print("[LOG] Loading Chroma...")
     if not CHROMA_DIR.exists():
         raise FileNotFoundError(f"Chroma DB non trovato: {CHROMA_DIR}")
 
@@ -309,7 +309,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
     llm = ChatOllama(model=llava_model, base_url=ollama_host)
     embedder = UnifiedCLIPEmbedding()
 
-    # colonne output
+    # output columns
     out_report_id = []
     out_dup_check = []
     out_dup_rank = []
@@ -318,7 +318,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
     out_error = []
 
     for idx, row in df.iterrows():
-        print(f"\n[LOG] === Riga {idx} ===")
+        print(f"\n[LOG] === Row {idx} ===")
         report_id = get_row_report_id(row)
 
         description_text = str(row.get("Description", "")).strip()
@@ -332,7 +332,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
                 input_imgs.append(p)
 
         if not input_imgs:
-            print("[LOG] Nessuna immagine disponibile per questa riga.")
+            print("[LOG] No images available for this row.")
             out_report_id.append(report_id)
             out_dup_check.append("FALSE")
             out_dup_rank.append("")
@@ -370,11 +370,11 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
             if len(snippet) > 300:
                 snippet = snippet[:300] + "..."
             cand_lines.append(
-                f"[CANDIDATO rank={i+1}] distance={dist:.4f} report_id={rid} image_path={imgp}\n"
+                f"[CANDIDATE rank={i+1}] distance={dist:.4f} report_id={rid} image_path={imgp}\n"
                 f"doc: {snippet}"
             )
 
-        retrieved_candidates_text = "\n\n".join(cand_lines) if cand_lines else "(nessun candidato disponibile)"
+        retrieved_candidates_text = "\n\n".join(cand_lines) if cand_lines else "(no candidates available)"
 
         dup = ask_duplicate_llava(
             input_images=input_imgs,
@@ -392,7 +392,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
         out_notes.append(dup.get("notes", ""))
         out_error.append("")
 
-    # scrivi CSV (solo duplicate-check; non riscrive il CSV di input)
+    # write CSV (duplicate check only; does not overwrite the input CSV)
     out_df = pd.DataFrame({
         "report_id": out_report_id,
         "duplicate_check": out_dup_check,
@@ -404,7 +404,7 @@ def duplicate_check_only(input_csv: Path, output_csv: str, top_k: int = 3):
 
     out_path = OUT_DIR / Path(output_csv).name
     out_df.to_csv(out_path, index=False)
-    print("[LOG] Salvato output CSV:", out_path)
+    print("[LOG] CSV output saved:", out_path)
 
 
 # =========================================================
